@@ -77,7 +77,9 @@ struct MeasureGroup     // Lidar data and imu dates for the curent process
     double lidar_beg_time;
     double lidar_end_time;
     PointCloudXYZRGBI::Ptr lidar;
-    deque<sensor_msgs::ImageConstPtr> rgb;
+    deque<sensor_msgs::ImageConstPtr> rgb_cam_1;
+    deque<sensor_msgs::ImageConstPtr> rgb_cam_2;
+
     deque<sensor_msgs::Imu::ConstPtr> imu;
 };
 

@@ -74,11 +74,29 @@ std::ofstream file("/home/inkers/rahul/catkin_fastlio_updated/timestamp_dump.txt
 
 // Calibration mats
 
-cv::Mat distCoeffs(5, 1, cv::DataType<double>::type);       // 畸变向量
-cv::Mat intrisic = cv::Mat::eye(3, 3, CV_64F);              // 内参3*3矩阵
-cv::Mat intrisicMat(3, 4, cv::DataType<double>::type);      // 内参3*4的投影矩阵，最后一列是三个零
-cv::Mat extrinsicMat_RT(4, 4, cv::DataType<double>::type);  // 外参旋转矩阵3*3和平移向量3*1
+cv::Mat cam_1_distCoeffs(5, 1, cv::DataType<double>::type);       // 畸变向量
+cv::Mat cam_1_intrisicMat(3, 4, cv::DataType<double>::type);      // 内参3*4的投影矩阵，最后一列是三个零
+cv::Mat cam_1_extrinsicMat_RT(4, 4, cv::DataType<double>::type);  // 外参旋转矩阵3*3和平移向量3*1
 
+
+// Coloring params
+
+// coloring global vars
+double m_obs_dis = 0;
+int m_N_rgb = 0;
+double m_last_obs_time = 0;
+double m_rgb[3] = {0};
+double m_cov_rgb[3] = {0};
+
+const double image_obs_cov = 15;
+const double process_noise_sigma = 0.1;
+double scale = 1.0;
+double used_fov_margin = 0.005;
+
+
+double cam_1_fx, cam_1_fy, cam_1_cx, cam_1_cy;
+double cam_2_fx, cam_2_fy, cam_2_cx, cam_2_cy;
+    
 // rgb sync variables
 bool rgb_first_time = true;
 bool rgb_push_flag_2 = false;
@@ -105,7 +123,7 @@ string root_dir = ROOT_DIR;
 string map_file_path, lid_topic, imu_topic, rgb_topic, pcd_save_path;
 
 double res_mean_last = 0.05, total_residual = 0.0;
-double last_timestamp_lidar = 0, last_rgb_timestamp = 0, last_timestamp_imu = -1.0;
+double last_timestamp_lidar = 0, last_rgb_cam_1_timestamp = 0, last_rgb_cam_2_timestamp = 0, last_timestamp_imu = -1.0;
 double gyr_cov = 0.1, acc_cov = 0.1, b_gyr_cov = 0.0001, b_acc_cov = 0.0001;
 double filter_size_corner_min = 0, filter_size_surf_min = 0, filter_size_map_min = 0, fov_deg = 0;
 double cube_len = 0, HALF_FOV_COS = 0, FOV_DEG = 0, total_distance = 0, lidar_end_time = 0, first_lidar_time = 0.0;
@@ -121,14 +139,21 @@ vector<PointVector>  Nearest_Points;
 vector<double>       extrinT(3, 0.0);
 vector<double>       extrinR(9, 0.0);
 
-vector<double>       rgb_param_extrinRT(16, 0.0);
-vector<double>       rgb_param_intrinsic(12, 0.0);
-vector<double>       rgb_param_distCoff(5, 0.0);
+vector<double>       cam_1_rgb_param_extrinRT(16, 0.0);
+vector<double>       cam_1_rgb_param_intrinsic(12, 0.0);
+vector<double>       cam_1_rgb_param_distCoff(5, 0.0);
+
+vector<double>       cam_2_rgb_param_extrinRT(16, 0.0);
+vector<double>       cam_2_rgb_param_intrinsic(12, 0.0);
+vector<double>       cam_2_rgb_param_distCoff(5, 0.0);
+
 
 deque<double>                     time_buffer;
 deque<PointCloudXYZRGBI::Ptr>        lidar_buffer;
 deque<sensor_msgs::Imu::ConstPtr> imu_buffer;
-deque<sensor_msgs::ImageConstPtr> rgb_buffer;
+deque<sensor_msgs::ImageConstPtr> rgb_cam_1_buffer;
+deque<sensor_msgs::ImageConstPtr> rgb_cam_2_buffer;
+
 
 
 PointCloudXYZRGBI::Ptr featsFromMap(new PointCloudXYZRGBI());
@@ -168,64 +193,59 @@ shared_ptr<ImuProcess> p_imu(new ImuProcess());
 
 void CalibrationData(void) {
 
-    // for(int p= 0; p<15; p++){
-    //     std::cout<<"rgb_param_extrinRT "<<rgb_param_extrinRT[p]<<std::endl;
-    // }
+    
     
     for (int i=0; i<4;i++){
         for(int j=0; j<4;j++){
-            extrinsicMat_RT.at<double>(i, j) = rgb_param_extrinRT[4*i+j];
+            cam_1_extrinsicMat_RT.at<double>(i, j) = rgb_param_extrinRT[4*i+j];
             // std::cout<<extrinsicMat_RT.at<double>(i, j)<<std::endl;
         }
     }
 
     for (int i=0; i<3;i++){
-        for(int j=0; j<4;j++){
-            intrisicMat.at<double>(i, j) = rgb_param_intrinsic[4*i+j];
-            std::cout<<intrisicMat.at<double>(i, j)<<std::endl;
+        for(int j=0; j<3;j++){
+            cam_1_intrisicMat.at<double>(i, j) = rgb_param_intrinsic[3*i+j];
+            // std::cout<<intrisicMat.at<double>(i, j)<<std::endl;
         }
     }   
     for (int i=0; i<5;i++){  
-            distCoeffs.at<double>(i) = rgb_param_distCoff[i];
+            cam_1_distCoeffs.at<double>(i) = rgb_param_distCoff[i];
             // std::cout<<distCoeffs.at<double>(i)<<std::endl;
     }  
 
-    // load calibration data
-    // extrinsicMat_RT.at<double>(0, 0) = 0.0183431;
-    // extrinsicMat_RT.at<double>(0, 1) = -0.999727;
-    // extrinsicMat_RT.at<double>(0, 2) = 0.0145029;
-    // extrinsicMat_RT.at<double>(0, 3) = 0;
-    // extrinsicMat_RT.at<double>(1, 0) = 0.0112924;
-    // extrinsicMat_RT.at<double>(1, 1) = -0.0142973;
-    // extrinsicMat_RT.at<double>(1, 2) = -0.999834;
-    // extrinsicMat_RT.at<double>(1, 3) = 0;
-    // extrinsicMat_RT.at<double>(2, 0) = 0.999768;
-    // extrinsicMat_RT.at<double>(2, 1) = 0.0185038;
-    // extrinsicMat_RT.at<double>(2, 2) = 0.0110271;
-    // extrinsicMat_RT.at<double>(2, 3) = 0;
-    // extrinsicMat_RT.at<double>(3, 0) = 0.0;
-    // extrinsicMat_RT.at<double>(3, 1) = 0.0;
-    // extrinsicMat_RT.at<double>(3, 2) = 0.0;
-    // extrinsicMat_RT.at<double>(3, 3) = 1.0;
+    cam_1_fx = cam_1_intrisicMat.at<double>(0,0);
+    cam_1_fy = cam_1_intrisicMat.at<double>(1,1);
+    cam_1_cx = cam_1_intrisicMat.at<double>(0,2);
+    cam_1_cy = cam_1_intrisicMat.at<double>(1,2);
 
-    // Calib for  oak 1  1080p
-    // intrisicMat.at<double>(0, 0) =  1482.90766;
-    // intrisicMat.at<double>(0, 1) = 0.000000e+00;
-    // intrisicMat.at<double>(0, 2) = 963.9341;
-    // intrisicMat.at<double>(0, 3) = 0.000000e+00;
-    // intrisicMat.at<double>(1, 0) = 0.000000e+00;
-    // intrisicMat.at<double>(1, 1) = 1481.21769;
-    // intrisicMat.at<double>(1, 2) = 554.14955;
-    // intrisicMat.at<double>(1, 3) = 0.000000e+00;
-    // intrisicMat.at<double>(2, 0) = 0.000000e+00;
-    // intrisicMat.at<double>(2, 1) = 0.000000e+00;
-    // intrisicMat.at<double>(2, 2) = 1.000000e+00;
-    // intrisicMat.at<double>(2, 3) = 0.000000e+00;
-    // distCoeffs.at<double>(0) = 0.055808;
-    // distCoeffs.at<double>(1) = -0.188869;
-    // distCoeffs.at<double>(2) = 0.000826;
-    // distCoeffs.at<double>(3) = 0.001517;
-    // distCoeffs.at<double>(4) = 0.000000;
+
+    // For cam 2
+
+    for (int i=0; i<4;i++){
+        for(int j=0; j<4;j++){
+            cam_2_extrinsicMat_RT.at<double>(i, j) = rgb_param_extrinRT[4*i+j];
+            // std::cout<<extrinsicMat_RT.at<double>(i, j)<<std::endl;
+        }
+    }
+
+    for (int i=0; i<3;i++){
+        for(int j=0; j<3;j++){
+            cam_2_intrisicMat.at<double>(i, j) = rgb_param_intrinsic[3*i+j];
+            // std::cout<<intrisicMat.at<double>(i, j)<<std::endl;
+        }
+    }   
+    for (int i=0; i<5;i++){  
+            cam_2_distCoeffs.at<double>(i) = rgb_param_distCoff[i];
+            // std::cout<<distCoeffs.at<double>(i)<<std::endl;
+    }  
+
+    cam_2_fx = cam_2_intrisicMat.at<double>(0,0);
+    cam_2_fy = cam_2_intrisicMat.at<double>(1,1);
+    cam_2_cx = cam_2_intrisicMat.at<double>(0,2);
+    cam_2_cy = cam_2_intrisicMat.at<double>(1,2);
+
+    
+
 }
 
 template <typename T>
@@ -251,6 +271,116 @@ inline T getSubPixel(cv::Mat &mat, const double &row, const double &col, double 
            (frac_row * frac_col * (T)mat.ptr<T>(ceil_row)[ceil_col]);
 
 }
+
+void color_point_cloud(int camera_id){
+                        
+    // std::cout<<"Lidar time and rgb time offset "<<diff<<std::endl;
+
+    
+    sensor_msgs::ImageConstPtr rgb_image;
+    // print type of the rgb_image
+    
+
+    if (camera_id == 1){
+        rgb_image = Measures.rgb_cam_1.back();
+        // rgb_image = Measures.rgb_cam_1.back();
+    }
+    else if (camera_id == 2){
+        rgb_image = Measures.rgb_cam_2.back();
+    }
+    else{
+        std::cout<<"Wrong camera id"<<std::endl;
+    }
+    cv::Mat src_img = cv_bridge::toCvShare(rgb_image, "bgr8")->image;  // image_raw is the image we got
+    cv::Mat view, rview, map1, map2;
+    cv::Size imageSize = src_img.size();
+
+
+    // omp_set_dynamic(0);     // Explicitly disable dynamic teams
+    // omp_set_num_threads(10);
+    #pragma omp parallel for
+    for (size_t nidx = 0; nidx < Measures.lidar->points.size(); nidx++) {
+        // constants
+        
+        cv::Mat m_img = src_img;
+        int m_img_rows = src_img.rows;
+        int m_img_cols = src_img.cols;
+
+        auto current_point = Measures.lidar->points[nidx];    
+        vec_3 pt_w(current_point.x, current_point.y, current_point.z);
+        vec_3 pt_cam = pt_w;
+
+        auto rt = cam_1_extrinsicMat_RT;
+
+        if (camera_id == 1){
+            rt = cam_1_extrinsicMat_RT;
+        }
+        else if (camera_id == 2){
+            rt = cam_1_extrinsicMat_RT;
+        }
+        else{
+            std::cout<<"Wrong camera id"<<std::endl;
+        }
+
+        vec_3 w = pt_w;
+        pt_cam(0) = rt.at<double>(0, 0) * w(0) + rt.at<double>(0, 1) * w(1) + rt.at<double>(0, 2) * w(2) + rt.at<double>(0, 3);
+        pt_cam(1) = rt.at<double>(1, 0) * w(0) + rt.at<double>(1, 1) * w(1) + rt.at<double>(1, 2) * w(2) + rt.at<double>(1, 3);
+        pt_cam(2) = rt.at<double>(2, 0) * w(0) + rt.at<double>(2, 1) * w(1) + rt.at<double>(2, 2) * w(2) + rt.at<double>(2, 3);
+
+        if (pt_cam(2) < 0.001) {
+            // std::cout<<"PT CAM ERROR";
+            continue;
+        }
+        double u, v;    
+        if (camera_id == 1){
+            u = (pt_cam(0) * cam_1_fx / pt_cam(2) + cam_1_cx) * scale;
+            v = (pt_cam(1) * cam_1_fy / pt_cam(2) + cam_1_cy) * scale;
+        }
+        else if (camera_id == 2){
+            u = (pt_cam(0) * cam_1_fx / pt_cam(2) + cam_1_cx) * scale;
+            v = (pt_cam(1) * cam_1_fy / pt_cam(2) + cam_1_cy) * scale;
+        }
+        else{
+            std::cout<<"Wrong camera id"<<std::endl;
+        }
+
+        
+
+        
+        if (((u / scale >= (used_fov_margin * m_img_cols + 1)) && (std::ceil(u / scale) < ((1 - used_fov_margin) * m_img_cols)) &&
+                (v / scale >= (used_fov_margin * m_img_rows + 1)) && (std::ceil(v / scale) < ((1 - used_fov_margin) * m_img_rows)))) {
+        } else {
+            
+            // std::cout<<"OUT OF FOV";
+            continue;
+            
+        }
+        
+        cv::Vec3b rgb = getSubPixel<cv::Vec3b>(m_img, v, u, 0);
+
+        
+        pt_cam = (pt_w);
+
+        // double obs_dis = pt_cam.norm();
+        // vec_3 obs_sigma = vec_3(image_obs_cov, image_obs_cov, image_obs_cov);
+        // double obs_time = rgb_image->header.stamp.toSec();
+
+
+
+        // now color the point
+        // std::cout << "color point cloud" << std::endl;
+        std::uint32_t r = rgb[2];
+        std::uint32_t g = rgb[1];
+        std::uint32_t b = rgb[0];
+
+        std::uint32_t a = 255;
+        std::uint32_t _rgb = ((std::uint32_t)a << 24 | (std::uint32_t)r << 16 | (std::uint32_t)g << 8) | b;
+        Measures.lidar->points[nidx].rgba = _rgb;
+        }
+
+    }
+
+
 
 void SigHandle(int sig)
 {
@@ -454,22 +584,43 @@ void livox_pcl_cbk(const livox_ros_driver::CustomMsg::ConstPtr &msg)
     sig_buffer.notify_all();
 }
 
-void rgb_cbk(const sensor_msgs::ImageConstPtr &msg) {
+void rgb_cam_1_cbk(const sensor_msgs::ImageConstPtr &msg) {
 
     // std::cout<<"INSIDE RGB CALLBACK"<<std::endl;
     mtx_buffer.lock();
     double preprocess_start_time = omp_get_wtime();
-    if (msg->header.stamp.toSec() < last_rgb_timestamp) {
+    if (msg->header.stamp.toSec() < last_rgb_cam_1_timestamp) {
         ROS_ERROR("RGB error loop back, clear buffer");
-        rgb_buffer.clear();
+        rgb_cam_1_buffer.clear();
     }
-    last_rgb_timestamp = msg->header.stamp.toSec();
+    last_rgb_cam_1_timestamp = msg->header.stamp.toSec();
     
-    if (!time_sync_en && abs(last_rgb_timestamp - last_timestamp_lidar - offset_value) > 10.0 && !lidar_buffer.empty() && !rgb_buffer.empty()) {
-        printf("Lidar and Rgb not Synced, Lidar time: %lf,RGB header time: %lf \n", last_timestamp_lidar, last_rgb_timestamp);
+    if (!time_sync_en && abs(last_rgb_cam_1_timestamp - last_timestamp_lidar - offset_value) > 10.0 && !lidar_buffer.empty() && !rgb_cam_1_buffer.empty()) {
+        printf("Lidar and Rgb not Synced, Lidar time: %lf,RGB header time: %lf \n", last_timestamp_lidar, last_rgb_cam_1_timestamp);
     }
     
-    rgb_buffer.push_back(msg);
+    rgb_cam_1_buffer.push_back(msg);
+    // std::cout<<"RGB 1 buffer size: "<<rgb_cam_1_buffer.size()<<std::endl;
+    mtx_buffer.unlock();
+    sig_buffer.notify_all();
+}
+
+void rgb_cam_2_cbk(const sensor_msgs::ImageConstPtr &msg) {
+
+    // std::cout<<"INSIDE RGB CALLBACK"<<std::endl;
+    mtx_buffer.lock();
+    double preprocess_start_time = omp_get_wtime();
+    if (msg->header.stamp.toSec() < last_rgb_cam_2_timestamp) {
+        ROS_ERROR("RGB error loop back, clear buffer");
+        rgb_cam_2_buffer.clear();
+    }
+    last_rgb_cam_2_timestamp = msg->header.stamp.toSec();
+    
+    if (!time_sync_en && abs(last_rgb_cam_2_timestamp - last_timestamp_lidar - offset_value) > 10.0 && !lidar_buffer.empty() && !rgb_cam_2_buffer.empty()) {
+        printf("Lidar and Rgb not Synced, Lidar time: %lf,RGB header time: %lf \n", last_timestamp_lidar, last_rgb_cam_2_timestamp);
+    }
+    
+    rgb_cam_2_buffer.push_back(msg);
     mtx_buffer.unlock();
     sig_buffer.notify_all();
 }
@@ -509,7 +660,7 @@ double lidar_mean_scantime = 0.0;
 int    scan_num = 0;
 bool sync_packages(MeasureGroup &meas)
 {
-    if (lidar_buffer.empty() || imu_buffer.empty() || rgb_buffer.empty()) {
+    if (lidar_buffer.empty() || imu_buffer.empty() || rgb_cam_1_buffer.empty()  ) {
         // std::cout<<"lidar_buffer or imu_buffer or rgb_buffer is empty"<<std::endl;
         return false;
     }
@@ -568,20 +719,40 @@ bool sync_packages(MeasureGroup &meas)
     }
 
 
-    // Pushing RGB image
-    double rgb_time = rgb_buffer.front()->header.stamp.toSec() - offset_value;
-    meas.rgb.clear();
-    while ((!rgb_buffer.empty()) && (rgb_time < lidar_end_time)) {
+    // Pushing RGB cam 1 image
+    double rgb_cam_1_time = rgb_cam_1_buffer.front()->header.stamp.toSec() - offset_value;
+    meas.rgb_cam_1.clear();
+    while ((!rgb_cam_1_buffer.empty()) && (rgb_cam_1_time < lidar_end_time)) {
         // std::lock_guard<std::mutex> lock(mtx_buffer);
-        rgb_time = rgb_buffer.front()->header.stamp.toSec() - offset_value;
-        if (rgb_time > lidar_end_time) break;
-        meas.rgb.push_back(rgb_buffer.front());
-        rgb_buffer.pop_front();
+        rgb_cam_1_time = rgb_cam_1_buffer.front()->header.stamp.toSec() - offset_value;
+        if (rgb_cam_1_time > lidar_end_time) break;
+        meas.rgb_cam_1.push_back(rgb_cam_1_buffer.front());
+        rgb_cam_1_buffer.pop_front();
     }
-    if (!meas.rgb.empty()) {
-        auto diff_time = meas.rgb.back()->header.stamp.toSec() - offset_value - time_buffer.front();
+    if (!meas.rgb_cam_1.empty()) {
+        auto diff_time = meas.rgb_cam_1.back()->header.stamp.toSec() - offset_value - time_buffer.front();
         // std::cout << "diff time" << diff_time << std::endl;
     }
+
+
+    // Pushing RGB cam 2 image
+
+    // double rgb_cam_2_time = rgb_cam_2_buffer.front()->header.stamp.toSec() - offset_value;
+    // meas.rgb_cam_2.clear();
+    // while ((!rgb_cam_2_buffer.empty()) && (rgb_cam_2_time < lidar_end_time)) {
+    //     // std::lock_guard<std::mutex> lock(mtx_buffer);
+    //     rgb_cam_2_time = rgb_cam_2_buffer.front()->header.stamp.toSec() - offset_value;
+    //     if (rgb_cam_2_time > lidar_end_time) break;
+    //     meas.rgb_cam_2.push_back(rgb_cam_2_buffer.front());
+    //     rgb_cam_2_buffer.pop_front();
+    // }
+    // if (!meas.rgb_cam_2.empty()) {
+    //     auto diff_time = meas.rgb_cam_2.back()->header.stamp.toSec() - offset_value - time_buffer.front();
+    //     // std::cout << "diff time" << diff_time << std::endl;
+    // }
+
+
+
 
 
     lidar_buffer.pop_front();
@@ -962,9 +1133,9 @@ int main(int argc, char** argv)
     nh.param<int>("pcd_save/interval", pcd_save_interval, -1);
     nh.param<vector<double>>("mapping/extrinsic_T", extrinT, vector<double>());
     nh.param<vector<double>>("mapping/extrinsic_R", extrinR, vector<double>());
-    nh.param<vector<double>>("rgb_params/extrinsic_RT", rgb_param_extrinRT, vector<double>());
-    nh.param<vector<double>>("rgb_params/intrinsic", rgb_param_intrinsic, vector<double>());
-    nh.param<vector<double>>("rgb_params/distCoff", rgb_param_distCoff, vector<double>());
+    nh.param<vector<double>>("cam_1_rgb_params/extrinsic_RT", cam_1_rgb_param_extrinRT, vector<double>());
+    nh.param<vector<double>>("cam_1_rgb_params/intrinsic", cam_1_rgb_param_intrinsic, vector<double>());
+    nh.param<vector<double>>("cam_1_rgb_params/distCoff", cam_1_rgb_param_distCoff, vector<double>());
     cout<<"p_pre->lidar_type "<<p_pre->lidar_type<<endl;
     
     path.header.stamp    = ros::Time::now();
@@ -1023,8 +1194,7 @@ int main(int argc, char** argv)
     ros::Subscriber sub_imu = nh.subscribe(imu_topic, 200000, imu_cbk);
 
     image_transport::ImageTransport it(nh);
-    // image_transport::Subscriber sub = it.subscribe("/uncompress_image", 100, &rgb_cbk);
-    image_transport::Subscriber sub = it.subscribe(rgb_topic, 100, &rgb_cbk);
+    image_transport::Subscriber sub = it.subscribe(rgb_topic, 100, &rgb_cam_1_cbk);
 
     ros::Publisher pubLaserCloudFull = nh.advertise<sensor_msgs::PointCloud2>
             ("/cloud_registered", 100000);
@@ -1039,12 +1209,7 @@ int main(int argc, char** argv)
     ros::Publisher pubPath          = nh.advertise<nav_msgs::Path> 
             ("/path", 100000);
 
-    // coloring global vars
-    double m_obs_dis = 0;
-    int m_N_rgb = 0;
-    double m_last_obs_time = 0;
-    double m_rgb[3] = {0};
-    double m_cov_rgb[3] = {0};
+    
     
 //------------------------------------------------------------------------------------------------------
     signal(SIGINT, SigHandle);
@@ -1076,107 +1241,10 @@ int main(int argc, char** argv)
                 // Print size of measures rgb buffer
                 // std::cout<<"RGB buffer size: "<<Measures.rgb.size()<<std::endl;
 
-                if (!Measures.rgb.empty()) {
-                    // auto diff = Measures.rgb.back()->header.stamp.toSec()- Measures.lidar->header.stamp.toSec()- offset_value;
+                if (!Measures.rgb_cam_1.empty()) {
 
-                    // std::cout<<"Lidar time and rgb time offset "<<diff<<std::endl;
-                    auto rgb_image = Measures.rgb.back();
-                    cv::Mat src_img = cv_bridge::toCvShare(rgb_image, "bgr8")->image;  // image_raw is the image we got
-                    cv::Mat view, rview, map1, map2;
-                    cv::Size imageSize = src_img.size();
+                    color_point_cloud(1);
 
-
-                // omp_set_dynamic(0);     // Explicitly disable dynamic teams
-                // omp_set_num_threads(10);
-                #pragma omp parallel for
-                for (size_t nidx = 0; nidx < Measures.lidar->points.size(); nidx++) {
-                    // constants
-                    const double image_obs_cov = 15;
-                    const double process_noise_sigma = 0.1;
-
-                    // intrinsics
-                    // double fx = 1482.90766;
-                    // double fy = 1481.21769;
-                    // double cx = 963.9341;
-                    // double cy = 554.14955;
-                    // Back camera
-                    // double fx = 845.404257;
-                    // double fy = 845.756218;
-                    // double cx = 642.550484;
-                    // double cy = 537.612199;
-                    // Front camera
-                    double fx = 1158.527007;
-                    double fy = 1158.004209;
-                    double cx = 726.118379;
-                    double cy = 565.866481;
-
-                    double scale = 1.0;
-                    double used_fov_margin = 0.005;
-                    cv::Mat m_img = src_img;
-                    // cv::Ptr<cv::CLAHE> clahe = cv::createCLAHE();
-                    // for (int i = 0; i < 3; i++) {
-                    //     cv::Mat channel;
-                    //     cv::extractChannel(m_img, channel, i);
-                    //     clahe->apply(channel, channel);
-                    //     cv::merge(channel, m_img);
-                    // }
-
-                    int m_img_rows = src_img.rows;
-                    int m_img_cols = src_img.cols;
-
-                    auto current_point = Measures.lidar->points[nidx];
-
-                    
-                    vec_3 pt_w(current_point.x, current_point.y, current_point.z);
-
-                    vec_3 pt_cam = pt_w;
-                    auto rt = extrinsicMat_RT;
-                    vec_3 w = pt_w;
-                    pt_cam(0) = rt.at<double>(0, 0) * w(0) + rt.at<double>(0, 1) * w(1) + rt.at<double>(0, 2) * w(2) + rt.at<double>(0, 3);
-                    pt_cam(1) = rt.at<double>(1, 0) * w(0) + rt.at<double>(1, 1) * w(1) + rt.at<double>(1, 2) * w(2) + rt.at<double>(1, 3);
-                    pt_cam(2) = rt.at<double>(2, 0) * w(0) + rt.at<double>(2, 1) * w(1) + rt.at<double>(2, 2) * w(2) + rt.at<double>(2, 3);
-
-                    if (pt_cam(2) < 0.001) {
-                        // std::cout<<"PT CAM ERROR";
-                        continue;
-                    }
-
-                    double u = (pt_cam(0) * fx / pt_cam(2) + cx) * scale;
-                    double v = (pt_cam(1) * fy / pt_cam(2) + cy) * scale;
-
-                    
-                    if (((u / scale >= (used_fov_margin * m_img_cols + 1)) && (std::ceil(u / scale) < ((1 - used_fov_margin) * m_img_cols)) &&
-                         (v / scale >= (used_fov_margin * m_img_rows + 1)) && (std::ceil(v / scale) < ((1 - used_fov_margin) * m_img_rows)))) {
-                    } else {
-                        
-                        // std::cout<<"OUT OF FOV";
-                        continue;
-                        
-                    }
-                    
-                    cv::Vec3b rgb = getSubPixel<cv::Vec3b>(m_img, v, u, 0);
-
-                    
-                    pt_cam = (pt_w);
-
-                    double obs_dis = pt_cam.norm();
-                    vec_3 obs_sigma = vec_3(image_obs_cov, image_obs_cov, image_obs_cov);
-                    double obs_time = rgb_image->header.stamp.toSec();
-
-
-
-                    // now color the point
-                    // std::cout << "color point cloud" << std::endl;
-                    std::uint32_t r = rgb[2];
-                    std::uint32_t g = rgb[1];
-                    std::uint32_t b = rgb[0];
-
-                    std::uint32_t a = 255;
-                    std::uint32_t _rgb = ((std::uint32_t)a << 24 | (std::uint32_t)r << 16 | (std::uint32_t)g << 8) | b;
-                    Measures.lidar->points[nidx].rgba = _rgb;
-                }
-
-                // publish_odometry(pubOdomAftMapped);
                 }
 
             p_imu->Process(Measures, kf, feats_undistort);
