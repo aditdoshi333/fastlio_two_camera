@@ -78,6 +78,10 @@ cv::Mat cam_1_distCoeffs(5, 1, cv::DataType<double>::type);       // 畸变向�
 cv::Mat cam_1_intrisicMat(3, 4, cv::DataType<double>::type);      // 内参3*4的投影矩阵，最后一列是三个零
 cv::Mat cam_1_extrinsicMat_RT(4, 4, cv::DataType<double>::type);  // 外参旋转矩阵3*3和平移向量3*1
 
+cv::Mat cam_2_distCoeffs(5, 1, cv::DataType<double>::type);       // 畸变向量
+cv::Mat cam_2_intrisicMat(3, 4, cv::DataType<double>::type);      // 内参3*4的投影矩阵，最后一列是三个零
+cv::Mat cam_2_extrinsicMat_RT(4, 4, cv::DataType<double>::type);  // 外参旋转矩阵3*3和平移向量3*1
+
 
 // Coloring params
 
@@ -120,7 +124,7 @@ mutex mtx_buffer;
 condition_variable sig_buffer;
 
 string root_dir = ROOT_DIR;
-string map_file_path, lid_topic, imu_topic, rgb_topic, pcd_save_path;
+string map_file_path, lid_topic, imu_topic, cam_1_rgb_topic, cam_2_rgb_topic, pcd_save_path;
 
 double res_mean_last = 0.05, total_residual = 0.0;
 double last_timestamp_lidar = 0, last_rgb_cam_1_timestamp = 0, last_rgb_cam_2_timestamp = 0, last_timestamp_imu = -1.0;
@@ -197,19 +201,19 @@ void CalibrationData(void) {
     
     for (int i=0; i<4;i++){
         for(int j=0; j<4;j++){
-            cam_1_extrinsicMat_RT.at<double>(i, j) = rgb_param_extrinRT[4*i+j];
+            cam_1_extrinsicMat_RT.at<double>(i, j) = cam_1_rgb_param_extrinRT[4*i+j];
             // std::cout<<extrinsicMat_RT.at<double>(i, j)<<std::endl;
         }
     }
 
     for (int i=0; i<3;i++){
         for(int j=0; j<3;j++){
-            cam_1_intrisicMat.at<double>(i, j) = rgb_param_intrinsic[3*i+j];
+            cam_1_intrisicMat.at<double>(i, j) = cam_1_rgb_param_intrinsic[3*i+j];
             // std::cout<<intrisicMat.at<double>(i, j)<<std::endl;
         }
     }   
     for (int i=0; i<5;i++){  
-            cam_1_distCoeffs.at<double>(i) = rgb_param_distCoff[i];
+            cam_1_distCoeffs.at<double>(i) = cam_1_rgb_param_distCoff[i];
             // std::cout<<distCoeffs.at<double>(i)<<std::endl;
     }  
 
@@ -223,19 +227,19 @@ void CalibrationData(void) {
 
     for (int i=0; i<4;i++){
         for(int j=0; j<4;j++){
-            cam_2_extrinsicMat_RT.at<double>(i, j) = rgb_param_extrinRT[4*i+j];
+            cam_2_extrinsicMat_RT.at<double>(i, j) = cam_2_rgb_param_extrinRT[4*i+j];
             // std::cout<<extrinsicMat_RT.at<double>(i, j)<<std::endl;
         }
     }
 
     for (int i=0; i<3;i++){
         for(int j=0; j<3;j++){
-            cam_2_intrisicMat.at<double>(i, j) = rgb_param_intrinsic[3*i+j];
+            cam_2_intrisicMat.at<double>(i, j) = cam_2_rgb_param_intrinsic[3*i+j];
             // std::cout<<intrisicMat.at<double>(i, j)<<std::endl;
         }
     }   
     for (int i=0; i<5;i++){  
-            cam_2_distCoeffs.at<double>(i) = rgb_param_distCoff[i];
+            cam_2_distCoeffs.at<double>(i) = cam_2_rgb_param_distCoff[i];
             // std::cout<<distCoeffs.at<double>(i)<<std::endl;
     }  
 
@@ -316,7 +320,7 @@ void color_point_cloud(int camera_id){
             rt = cam_1_extrinsicMat_RT;
         }
         else if (camera_id == 2){
-            rt = cam_1_extrinsicMat_RT;
+            rt = cam_2_extrinsicMat_RT;
         }
         else{
             std::cout<<"Wrong camera id"<<std::endl;
@@ -337,8 +341,8 @@ void color_point_cloud(int camera_id){
             v = (pt_cam(1) * cam_1_fy / pt_cam(2) + cam_1_cy) * scale;
         }
         else if (camera_id == 2){
-            u = (pt_cam(0) * cam_1_fx / pt_cam(2) + cam_1_cx) * scale;
-            v = (pt_cam(1) * cam_1_fy / pt_cam(2) + cam_1_cy) * scale;
+            u = (pt_cam(0) * cam_2_fx / pt_cam(2) + cam_2_cx) * scale;
+            v = (pt_cam(1) * cam_2_fy / pt_cam(2) + cam_2_cy) * scale;
         }
         else{
             std::cout<<"Wrong camera id"<<std::endl;
@@ -621,6 +625,7 @@ void rgb_cam_2_cbk(const sensor_msgs::ImageConstPtr &msg) {
     }
     
     rgb_cam_2_buffer.push_back(msg);
+    std:cout<<"RGB 2 buffer size: "<<rgb_cam_2_buffer.size()<<std::endl;
     mtx_buffer.unlock();
     sig_buffer.notify_all();
 }
@@ -660,7 +665,7 @@ double lidar_mean_scantime = 0.0;
 int    scan_num = 0;
 bool sync_packages(MeasureGroup &meas)
 {
-    if (lidar_buffer.empty() || imu_buffer.empty() || rgb_cam_1_buffer.empty()  ) {
+    if (lidar_buffer.empty() || imu_buffer.empty() || rgb_cam_1_buffer.empty() || rgb_cam_2_buffer.empty()  ) {
         // std::cout<<"lidar_buffer or imu_buffer or rgb_buffer is empty"<<std::endl;
         return false;
     }
@@ -737,19 +742,19 @@ bool sync_packages(MeasureGroup &meas)
 
     // Pushing RGB cam 2 image
 
-    // double rgb_cam_2_time = rgb_cam_2_buffer.front()->header.stamp.toSec() - offset_value;
-    // meas.rgb_cam_2.clear();
-    // while ((!rgb_cam_2_buffer.empty()) && (rgb_cam_2_time < lidar_end_time)) {
-    //     // std::lock_guard<std::mutex> lock(mtx_buffer);
-    //     rgb_cam_2_time = rgb_cam_2_buffer.front()->header.stamp.toSec() - offset_value;
-    //     if (rgb_cam_2_time > lidar_end_time) break;
-    //     meas.rgb_cam_2.push_back(rgb_cam_2_buffer.front());
-    //     rgb_cam_2_buffer.pop_front();
-    // }
-    // if (!meas.rgb_cam_2.empty()) {
-    //     auto diff_time = meas.rgb_cam_2.back()->header.stamp.toSec() - offset_value - time_buffer.front();
-    //     // std::cout << "diff time" << diff_time << std::endl;
-    // }
+    double rgb_cam_2_time = rgb_cam_2_buffer.front()->header.stamp.toSec() - offset_value;
+    meas.rgb_cam_2.clear();
+    while ((!rgb_cam_2_buffer.empty()) && (rgb_cam_2_time < lidar_end_time)) {
+        // std::lock_guard<std::mutex> lock(mtx_buffer);
+        rgb_cam_2_time = rgb_cam_2_buffer.front()->header.stamp.toSec() - offset_value;
+        if (rgb_cam_2_time > lidar_end_time) break;
+        meas.rgb_cam_2.push_back(rgb_cam_2_buffer.front());
+        rgb_cam_2_buffer.pop_front();
+    }
+    if (!meas.rgb_cam_2.empty()) {
+        auto diff_time = meas.rgb_cam_2.back()->header.stamp.toSec() - offset_value - time_buffer.front();
+        // std::cout << "diff time" << diff_time << std::endl;
+    }
 
 
 
@@ -1106,7 +1111,9 @@ int main(int argc, char** argv)
     nh.param<string>("map_file_path",map_file_path,"");
     nh.param<string>("common/lid_topic",lid_topic,"/livox/lidar");
     nh.param<string>("common/imu_topic", imu_topic,"/livox/imu");
-    nh.param<string>("rgb_image_topic", rgb_topic,"/uncompressed");
+    nh.param<string>("common/cam_1_image_topic", cam_1_rgb_topic,"/uncompressed_1");
+    nh.param<string>("common/cam_2_image_topic", cam_2_rgb_topic,"/uncompressed_2");
+
     nh.param<string>("pcd_save_path", pcd_save_path,"/home/inkers/rahul");
     nh.param<bool>("common/time_sync_en", time_sync_en, false);
     nh.param<double>("common/time_offset_lidar_to_imu", time_diff_lidar_to_imu, 0.0);
@@ -1136,6 +1143,10 @@ int main(int argc, char** argv)
     nh.param<vector<double>>("cam_1_rgb_params/extrinsic_RT", cam_1_rgb_param_extrinRT, vector<double>());
     nh.param<vector<double>>("cam_1_rgb_params/intrinsic", cam_1_rgb_param_intrinsic, vector<double>());
     nh.param<vector<double>>("cam_1_rgb_params/distCoff", cam_1_rgb_param_distCoff, vector<double>());
+    nh.param<vector<double>>("cam_2_rgb_params/extrinsic_RT", cam_2_rgb_param_extrinRT, vector<double>());
+    nh.param<vector<double>>("cam_2_rgb_params/intrinsic", cam_2_rgb_param_intrinsic, vector<double>());
+    nh.param<vector<double>>("cam_2_rgb_params/distCoff", cam_2_rgb_param_distCoff, vector<double>());
+    
     cout<<"p_pre->lidar_type "<<p_pre->lidar_type<<endl;
     
     path.header.stamp    = ros::Time::now();
@@ -1194,7 +1205,9 @@ int main(int argc, char** argv)
     ros::Subscriber sub_imu = nh.subscribe(imu_topic, 200000, imu_cbk);
 
     image_transport::ImageTransport it(nh);
-    image_transport::Subscriber sub = it.subscribe(rgb_topic, 100, &rgb_cam_1_cbk);
+    image_transport::Subscriber cam_1_sub = it.subscribe(cam_1_rgb_topic, 100, &rgb_cam_1_cbk);
+    image_transport::Subscriber cam_2_sub = it.subscribe(cam_2_rgb_topic, 100, &rgb_cam_2_cbk);
+
 
     ros::Publisher pubLaserCloudFull = nh.advertise<sensor_msgs::PointCloud2>
             ("/cloud_registered", 100000);
@@ -1244,7 +1257,14 @@ int main(int argc, char** argv)
                 if (!Measures.rgb_cam_1.empty()) {
 
                     color_point_cloud(1);
+                    
 
+
+                }
+
+                if(!Measures.rgb_cam_2.empty()) {
+
+                    color_point_cloud(2);
                 }
 
             p_imu->Process(Measures, kf, feats_undistort);

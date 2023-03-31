@@ -1,8 +1,8 @@
 common:
     lid_topic:  "/ouster/points"
     imu_topic:  "/ouster/imu"
-    rgb_image_topic: "/uncompress_image"
-    camera_2_topic: "/ouster/camera_2/image_raw"
+    cam_1_image_topic: "/cam_1_uncompress_image"
+    cam_2_image_topic: "/cam_2_uncompress_image"
     time_sync_en: false         # ONLY turn on when external time synchronization is really not possible
     time_offset_lidar_to_imu: 0.0 # Time offset between lidar and IMU calibrated by other algorithms, e.g. LI-Init (can be found in README).
                                   # This param will take effect no matter what time_sync_en is. So if the time offset is not known exactly, please set as 0.0
@@ -38,6 +38,21 @@ cam_1_rgb_params:
             0.     ,    0.     ,    1.     ]
     distCoff:
             [-0.241631, 0.092233, -0.000076, 0.000014, 0.000000]
+
+
+cam_2_rgb_params:
+    extrinsic_RT: 
+            [-0.999903  , -0.00302542,  0.013622  , -0.0432012 ,
+            -0.0136562 ,  0.0115898 , -0.99984   , -0.04419386,
+            0.00286706, -0.999928  , -0.01163   ,  0.03561195,
+            0.        ,  0.        ,  0.        ,  1.        ]   
+
+    intrinsic: [845.404257, 0.000000, 642.550484,
+                    0.000000, 845.756218, 537.612199,
+                    0.000000, 0.000000, 1.000000]
+
+    distCoff: [-0.233781, 0.077340, -0.000582, -0.000710, 0.000000]
+
 
 publish:
     path_en:  false
